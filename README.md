@@ -1,5 +1,11 @@
+## ★ This fork is a R2S2R extension of the F1TENTH gym ROS2 bridge
+
+- R2S2R extension maintained by [Luc Coupal](https://redleader962.github.io) (NorLab)
+- Original version at https://github.com/f1tenth/f1tenth_gym_ros
+
 # F1TENTH gym environment ROS2 communication bridge
 This is a containerized ROS communication bridge for the F1TENTH gym environment that turns it into a simulation in ROS2.
+
 
 # Installation
 
