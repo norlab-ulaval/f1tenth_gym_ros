@@ -20,30 +20,25 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import os
+
+import yaml
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch_ros.actions import Node
-from launch.substitutions import Command
-from launch.substitutions import (
-    LaunchConfiguration,
-    PythonExpression,
-    TextSubstitution,
-    PathJoinSubstitution,
-)
-from launch_ros.substitutions import FindPackageShare
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import (
-    IfCondition,
+    IfCondition, LaunchConfigurationEquals, LaunchConfigurationNotEquals, UnlessCondition,
     evaluate_condition_expression,
-    LaunchConfigurationEquals,
-    LaunchConfigurationNotEquals,
-    UnlessCondition,
-)
-from ament_index_python.packages import get_package_share_directory
-import os
-import yaml
+    )
+from launch.substitutions import (
+    Command, LaunchConfiguration, PathJoinSubstitution,
+    PythonExpression, TextSubstitution,
+    )
+from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
 
 
-def generate_launch_description():
+def generate_launch_description() -> LaunchDescription:
     return LaunchDescription(
         [
             IncludeLaunchDescription(
