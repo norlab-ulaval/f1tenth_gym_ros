@@ -42,7 +42,11 @@ bridge:
     scan_beams: 1080
 
     # map parameters
-    map_path: '/sim_ws/src/f1tenth_gym_ros/maps/levine'
+#    map_path: '/sim_ws/src/f1tenth_gym_ros/maps/levine'
+#    map_path: '/ros2_ws/src/f1tenth_gym_ros/maps/levine'
+    # ToDo: implement >> runtime variable subtitution for 'DN_DEV_WORKSPACE'
+#    map_path: "${DN_DEV_WORKSPACE}/src/f1tenth-redleader-controller/src/simulator/r2s2r_f1tenth_gym_ros/f1tenth_gym_ros/maps/levine"
+    map_path: "/ros2_ws/src/f1tenth-redleader-controller/src/simulator/r2s2r_f1tenth_gym_ros/f1tenth_gym_ros/maps/levine"
     map_img_ext: '.png'
 
     # opponent parameters
