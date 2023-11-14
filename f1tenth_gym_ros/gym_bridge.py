@@ -43,6 +43,23 @@ class GymBridge(Node):
     def __init__(self):
         super().__init__('gym_bridge')
 
+        self.episode_time = None
+        self.ego_scan = None
+        self.done = None
+        self.obs = None
+        self.has_opp = None
+        self.opp_scan = None
+        self.opp_collision = None
+        self.opp_steer = None
+        self.opp_requested_speed = None
+        self.opp_speed = None
+        self.opp_pose = None
+        self.opp_namespace = None
+        self.ego_collision = None
+        self.ego_steer = None
+        self.ego_requested_speed = None
+        self.ego_speed = None
+        self.ego_pose = None
         self.declare_parameter('ego_namespace')
         self.declare_parameter('ego_odom_topic')
         self.declare_parameter('ego_opp_odom_topic')
@@ -68,10 +85,10 @@ class GymBridge(Node):
         self.declare_parameter('kb_teleop')
 
         # check num_agents
-        num_agents = self.get_parameter('num_agent').value
-        if num_agents < 1 or num_agents > 2:
+        self.num_agents = self.get_parameter('num_agent').value
+        if self.num_agents < 1 or self.num_agents > 2:
             raise ValueError('num_agents should be either 1 or 2.')
-        elif type(num_agents) != int:
+        elif type(self.num_agents) != int:
             raise ValueError('num_agents should be an int.')
 
         # env backend
@@ -79,9 +96,76 @@ class GymBridge(Node):
             'f110_gym:f110-v0',
             map=self.get_parameter('map_path').value,
             map_ext=self.get_parameter('map_img_ext').value,
-            num_agents=num_agents,
+            num_agents=self.num_agents,
         )
 
+        ego_scan_topic = self.get_parameter('ego_scan_topic').value
+        ego_drive_topic = self.get_parameter('ego_drive_topic').value
+
+        scan_fov = self.get_parameter('scan_fov').value
+        scan_beams = self.get_parameter('scan_beams').value
+        self.angle_min = -scan_fov / 2.0
+        self.angle_max = scan_fov / 2.0
+        self.angle_inc = scan_fov / scan_beams
+
+        self.ego_namespace = self.get_parameter('ego_namespace').value
+        ego_odom_topic = self.ego_namespace + '/' + self.get_parameter('ego_odom_topic').value
+        self.scan_distance_to_base_link = self.get_parameter('scan_distance_to_base_link').value
+
+        # sim physical step timer
+        self.drive_timer = self.create_timer(0.01, self.drive_timer_callback)
+        # topic publishing timer
+        self.timer = self.create_timer(0.004, self.timer_callback)
+
+        if self.num_agents == 2:
+            self.has_opp = True
+            self.opp_namespace = self.get_parameter('opp_namespace').value
+            opp_scan_topic = self.get_parameter('opp_scan_topic').value
+            opp_odom_topic = self.opp_namespace + '/' + self.get_parameter('opp_odom_topic').value
+            opp_drive_topic = self.get_parameter('opp_drive_topic').value
+
+            ego_opp_odom_topic = (
+                self.ego_namespace + '/' + self.get_parameter('ego_opp_odom_topic').value
+            )
+            opp_ego_odom_topic = (
+                self.opp_namespace + '/' + self.get_parameter('opp_ego_odom_topic').value
+            )
+
+        self.reset_environment()
+
+        # transform broadcaster
+        self.br = TransformBroadcaster(self)
+
+        # publishers
+        self.ego_scan_pub = self.create_publisher(LaserScan, ego_scan_topic, 10)
+        self.ego_odom_pub = self.create_publisher(Odometry, ego_odom_topic, 10)
+        self.ego_drive_published = False
+        if self.num_agents == 2:
+            self.opp_scan_pub = self.create_publisher(LaserScan, opp_scan_topic, 10)
+            self.ego_opp_odom_pub = self.create_publisher(Odometry, ego_opp_odom_topic, 10)
+            self.opp_odom_pub = self.create_publisher(Odometry, opp_odom_topic, 10)
+            self.opp_ego_odom_pub = self.create_publisher(Odometry, opp_ego_odom_topic, 10)
+            self.opp_drive_published = False
+
+        # subscribers
+        self.ego_drive_sub = self.create_subscription(
+            AckermannDriveStamped, ego_drive_topic, self.drive_callback, 10
+        )
+        self.ego_reset_sub = self.create_subscription(
+            PoseWithCovarianceStamped, '/initialpose', self.ego_reset_callback, 10
+        )
+        if self.num_agents == 2:
+            self.opp_drive_sub = self.create_subscription(
+                AckermannDriveStamped, opp_drive_topic, self.opp_drive_callback, 10
+            )
+            self.opp_reset_sub = self.create_subscription(
+                PoseStamped, '/goal_pose', self.opp_reset_callback, 10
+            )
+
+        if self.get_parameter('kb_teleop').value:
+            self.teleop_sub = self.create_subscription(Twist, '/cmd_vel', self.teleop_callback, 10)
+
+    def reset_environment(self):
         sx = self.get_parameter('sx').value
         sy = self.get_parameter('sy').value
         stheta = self.get_parameter('stheta').value
@@ -90,20 +174,7 @@ class GymBridge(Node):
         self.ego_requested_speed = 0.0
         self.ego_steer = 0.0
         self.ego_collision = False
-        ego_scan_topic = self.get_parameter('ego_scan_topic').value
-        ego_drive_topic = self.get_parameter('ego_drive_topic').value
-        scan_fov = self.get_parameter('scan_fov').value
-        scan_beams = self.get_parameter('scan_beams').value
-        self.angle_min = -scan_fov / 2.0
-        self.angle_max = scan_fov / 2.0
-        self.angle_inc = scan_fov / scan_beams
-        self.ego_namespace = self.get_parameter('ego_namespace').value
-        ego_odom_topic = self.ego_namespace + '/' + self.get_parameter('ego_odom_topic').value
-        self.scan_distance_to_base_link = self.get_parameter('scan_distance_to_base_link').value
-
-        if num_agents == 2:
-            self.has_opp = True
-            self.opp_namespace = self.get_parameter('opp_namespace').value
+        if self.num_agents == 2:
             sx1 = self.get_parameter('sx1').value
             sy1 = self.get_parameter('sy1').value
             stheta1 = self.get_parameter('stheta1').value
@@ -118,57 +189,14 @@ class GymBridge(Node):
             self.ego_scan = list(self.obs['scans'][0])
             self.opp_scan = list(self.obs['scans'][1])
 
-            opp_scan_topic = self.get_parameter('opp_scan_topic').value
-            opp_odom_topic = self.opp_namespace + '/' + self.get_parameter('opp_odom_topic').value
-            opp_drive_topic = self.get_parameter('opp_drive_topic').value
-
-            ego_opp_odom_topic = (
-                self.ego_namespace + '/' + self.get_parameter('ego_opp_odom_topic').value
-            )
-            opp_ego_odom_topic = (
-                self.opp_namespace + '/' + self.get_parameter('opp_ego_odom_topic').value
-            )
         else:
             self.has_opp = False
             self.obs, _, self.done, _ = self.env.reset(np.array([[sx, sy, stheta]]))
             self.ego_scan = list(self.obs['scans'][0])
 
-        # sim physical step timer
-        self.drive_timer = self.create_timer(0.01, self.drive_timer_callback)
-        # topic publishing timer
-        self.timer = self.create_timer(0.004, self.timer_callback)
+        self.episode_time = self.get_clock().now().to_msg()
 
-        # transform broadcaster
-        self.br = TransformBroadcaster(self)
-
-        # publishers
-        self.ego_scan_pub = self.create_publisher(LaserScan, ego_scan_topic, 10)
-        self.ego_odom_pub = self.create_publisher(Odometry, ego_odom_topic, 10)
-        self.ego_drive_published = False
-        if num_agents == 2:
-            self.opp_scan_pub = self.create_publisher(LaserScan, opp_scan_topic, 10)
-            self.ego_opp_odom_pub = self.create_publisher(Odometry, ego_opp_odom_topic, 10)
-            self.opp_odom_pub = self.create_publisher(Odometry, opp_odom_topic, 10)
-            self.opp_ego_odom_pub = self.create_publisher(Odometry, opp_ego_odom_topic, 10)
-            self.opp_drive_published = False
-
-        # subscribers
-        self.ego_drive_sub = self.create_subscription(
-            AckermannDriveStamped, ego_drive_topic, self.drive_callback, 10
-        )
-        self.ego_reset_sub = self.create_subscription(
-            PoseWithCovarianceStamped, '/initialpose', self.ego_reset_callback, 10
-        )
-        if num_agents == 2:
-            self.opp_drive_sub = self.create_subscription(
-                AckermannDriveStamped, opp_drive_topic, self.opp_drive_callback, 10
-            )
-            self.opp_reset_sub = self.create_subscription(
-                PoseStamped, '/goal_pose', self.opp_reset_callback, 10
-            )
-
-        if self.get_parameter('kb_teleop').value:
-            self.teleop_sub = self.create_subscription(Twist, '/cmd_vel', self.teleop_callback, 10)
+        return None
 
     def drive_callback(self, drive_msg):
         self.ego_requested_speed = drive_msg.drive.speed
@@ -235,6 +263,9 @@ class GymBridge(Node):
                 )
             )
         self._update_sim_state()
+
+        if self.done:
+            self.get_logger().info("f110 › Episode DONE")
 
     def timer_callback(self):
         ts = self.get_clock().now().to_msg()
