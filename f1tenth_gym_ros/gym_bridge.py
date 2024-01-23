@@ -22,6 +22,8 @@
 
 import rclpy
 from rclpy.node import Node
+from rclpy.publisher import Publisher
+from rclpy.subscription import Subscription
 
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import Odometry
@@ -34,32 +36,57 @@ from geometry_msgs.msg import Quaternion
 from ackermann_msgs.msg import AckermannDriveStamped
 from tf2_ros import TransformBroadcaster
 
+from std_msgs.msg import Float64
+
 import gym
 import numpy as np
 from transforms3d import euler
 
+from typing import Any, List
+
 
 class GymBridge(Node):
+    _episode_time_start: Any
+    ego_scan: Any
+    done: Any
+    obs: Any
+    has_opp: Any
+    opp_scan: Any
+    opp_collision: Any
+    opp_steer: Any
+    opp_requested_speed: Any
+    opp_speed: Any
+    opp_pose: Any
+    opp_namespace: Any
+    ego_collision: Any
+    ego_steer: Any
+    ego_requested_speed: Any
+    ego_speed: Any
+    ego_pose: Any
+
+    ego_scan_pub: Publisher
+    ego_odom_pub: Publisher
+    opp_scan_pub: Publisher
+    ego_opp_odom_pub: Publisher
+    opp_odom_pub: Publisher
+    opp_ego_odom_pub: Publisher
+
+    sim_collisions_pub: Publisher
+    sim_lap_times_wallclock_pub: Publisher
+    sim_lap_times_timsteps_pub: Publisher
+    sim_lap_counts_pub: Publisher
+    _current_laps: List[float]
+    _laps_wallclock_time_ego: List[float]
+    _laps_wallclock_time_opp: List[float]
+
+    ego_drive_sub: Subscription
+    ego_reset_sub: Subscription
+    opp_drive_sub: Subscription
+    opp_reset_sub: Subscription
+
     def __init__(self):
         super().__init__('gym_bridge')
 
-        self.episode_time = None
-        self.ego_scan = None
-        self.done = None
-        self.obs = None
-        self.has_opp = None
-        self.opp_scan = None
-        self.opp_collision = None
-        self.opp_steer = None
-        self.opp_requested_speed = None
-        self.opp_speed = None
-        self.opp_pose = None
-        self.opp_namespace = None
-        self.ego_collision = None
-        self.ego_steer = None
-        self.ego_requested_speed = None
-        self.ego_speed = None
-        self.ego_pose = None
         self.declare_parameter('ego_namespace')
         self.declare_parameter('ego_odom_topic')
         self.declare_parameter('ego_opp_odom_topic')
@@ -136,10 +163,13 @@ class GymBridge(Node):
         # transform broadcaster
         self.br = TransformBroadcaster(self)
 
-        # publishers
+        # === Publishers ==========================================================================
+        # ... Ego related topics ..................................................................
         self.ego_scan_pub = self.create_publisher(LaserScan, ego_scan_topic, 10)
         self.ego_odom_pub = self.create_publisher(Odometry, ego_odom_topic, 10)
         self.ego_drive_published = False
+
+        # ... Opponent related topics .............................................................
         if self.num_agents == 2:
             self.opp_scan_pub = self.create_publisher(LaserScan, opp_scan_topic, 10)
             self.ego_opp_odom_pub = self.create_publisher(Odometry, ego_opp_odom_topic, 10)
@@ -147,13 +177,29 @@ class GymBridge(Node):
             self.opp_ego_odom_pub = self.create_publisher(Odometry, opp_ego_odom_topic, 10)
             self.opp_drive_published = False
 
-        # subscribers
+        # ... Simulator related topics ............................................................
+        # Note:
+        #   - 'sim_lap_times_wallclock_pub' use the ros2 node time
+        #   - 'sim_lap_times_timsteps_pub' use 'lap_times' from the f110-gym obs space
+        self.sim_collisions_pub = self.create_publisher(Float64, 'sim/collisions', 10)
+        self.sim_lap_times_wallclock_pub = self.create_publisher(
+            Float64, 'sim/lap_times_wallclock', 10
+        )
+        self.sim_lap_times_timsteps_pub = self.create_publisher(
+            Float64, 'sim/lap_times_timsteps', 10
+        )
+        self.sim_lap_counts_pub = self.create_publisher(Float64, 'sim/lap_counts', 10)
+
+        # === Subscribers =========================================================================
+        # ... Ego related topics ..................................................................
         self.ego_drive_sub = self.create_subscription(
             AckermannDriveStamped, ego_drive_topic, self.drive_callback, 10
         )
         self.ego_reset_sub = self.create_subscription(
             PoseWithCovarianceStamped, '/initialpose', self.ego_reset_callback, 10
         )
+
+        # ... Opponent related topics .............................................................
         if self.num_agents == 2:
             self.opp_drive_sub = self.create_subscription(
                 AckermannDriveStamped, opp_drive_topic, self.opp_drive_callback, 10
@@ -162,10 +208,16 @@ class GymBridge(Node):
                 PoseStamped, '/goal_pose', self.opp_reset_callback, 10
             )
 
+        # ... Telepo related topics ...............................................................
         if self.get_parameter('kb_teleop').value:
             self.teleop_sub = self.create_subscription(Twist, '/cmd_vel', self.teleop_callback, 10)
 
-    def reset_environment(self):
+    def reset_environment(self) -> None:
+        """
+        Reset the simulator to the initial state (both ego and opp)
+
+        :return: None
+        """
         sx = self.get_parameter('sx').value
         sy = self.get_parameter('sy').value
         stheta = self.get_parameter('stheta').value
@@ -194,7 +246,11 @@ class GymBridge(Node):
             self.obs, _, self.done, _ = self.env.reset(np.array([[sx, sy, stheta]]))
             self.ego_scan = list(self.obs['scans'][0])
 
-        self.episode_time = self.get_clock().now().to_msg()
+        self.get_logger().info("f110-gym › Episode start")
+        self._current_laps = [0.0, 0.0]
+        self._episode_time_start = self.get_clock().now().to_msg()
+        self._laps_wallclock_time_ego = []
+        self._laps_wallclock_time_opp = []
 
         return None
 
@@ -262,10 +318,36 @@ class GymBridge(Node):
                     ]
                 )
             )
+
         self._update_sim_state()
 
+        # (CRITICAL) ToDo: unit-test
+        if self.obs['lap_counts'][0] > self._current_laps[0]:
+            self._laps_wallclock_time_ego += (
+                self.get_clock().now().to_msg() - self._episode_time_start
+            )
+        
+        # (CRITICAL) ToDo: unit-test
+        if self.num_agents == 2:
+            if self.obs['lap_counts'][1] > self._current_laps[1]:
+                self._laps_wallclock_time_opp += (
+                    self.get_clock().now().to_msg() - self._episode_time_start
+                )
+
         if self.done:
-            self.get_logger().info("f110 › Episode DONE")
+            # (CRITICAL) ToDo: unit-test
+            self.sim_collisions_pub.publish(self.obs['collisions'])
+            self.sim_lap_times_timsteps_pub.publish(self.obs['lap_times'])
+            self.sim_lap_counts_pub.publish(self.obs['lap_counts'])
+
+            self.get_logger().info(
+                "f110-gym › Episode DONE"
+                f"  - collisions: {self.obs['collisions']}"
+                f"  - lap_times: {self.obs['lap_times']}"
+                f"  - lap_counts: {self.obs['lap_counts']}"
+            )
+            self.reset_environment()
+            self._update_sim_state()
 
     def timer_callback(self):
         ts = self.get_clock().now().to_msg()
