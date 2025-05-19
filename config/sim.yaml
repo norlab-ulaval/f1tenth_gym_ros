@@ -44,10 +44,13 @@ bridge:
     # map parameters
 #    map_path: '/sim_ws/src/f1tenth_gym_ros/maps/levine'
 #    map_path: '/ros2_ws/src/f1tenth_gym_ros/maps/levine'
+
     # ToDo: implement >> runtime variable subtitution for 'DN_DEV_WORKSPACE'
-#    map_path: "${DN_DEV_WORKSPACE}/src/f1tenth-redleader-controller/src/simulator/r2s2r_f1tenth_gym_ros/f1tenth_gym_ros/maps/levine"
-#    map_path: "/ros2_ws/src/f1tenth-redleader-controller/src/simulator/r2s2r_f1tenth_gym_ros/f1tenth_gym_ros/maps/levine"
-    map_path: "/ros2_ws/src/f1tenth-redleader-controller/src/ros2_packages/r2s2r_f1tenth_gym_ros/f1tenth_gym_ros/maps/levine"
+#    map_path: "${DN_DEV_WORKSPACE}/src/RedLeader-research-codebase/src/simulator/r2s2r_f1tenth_gym_ros/f1tenth_gym_ros/maps/levine"
+#    map_path: "/ros2_ws/src/RedLeader-research-codebase/src/simulator/r2s2r_f1tenth_gym_ros/f1tenth_gym_ros/maps/levine"
+
+    # (CRITICAL) ToDo: this hardcoded path should be feed via hydra config or via param. This is NOT portable.
+    map_path: "/ros2_ws/src/RedLeader-research-codebase/src/ros2_packages/r2s2r_f1tenth_gym_ros/f1tenth_gym_ros/maps/levine"
     map_img_ext: '.png'
 
     # opponent parameters
