@@ -20,19 +20,20 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-FROM ros:foxy
+ARG ROS_DISTRO=foxy
+FROM ros:${ROS_DISTRO}
 
 SHELL ["/bin/bash", "-c"]
 
 # dependencies
-RUN apt-get update --fix-missing && \
+RUN apt-get update --ignore-missing && \
     apt-get install -y git \
                        nano \
                        vim \
                        python3-pip \
                        libeigen3-dev \
                        tmux \
-                       ros-foxy-rviz2
+                       ros-${ROS_DISTRO}-rviz2
 RUN apt-get -y dist-upgrade
 RUN pip3 install transforms3d
 
@@ -44,10 +45,10 @@ RUN cd f1tenth_gym && \
 # ros2 gym bridge
 RUN mkdir -p sim_ws/src/f1tenth_gym_ros
 COPY . /sim_ws/src/f1tenth_gym_ros
-RUN source /opt/ros/foxy/setup.bash && \
+RUN source /opt/ros/${ROS_DISTRO}/setup.bash && \
     cd sim_ws/ && \
-    apt-get update --fix-missing && \
-    rosdep install -i --from-path src --rosdistro foxy -y && \
+    apt-get update --ignore-missing && \
+    rosdep install -i --from-path src --rosdistro ${ROS_DISTRO} -y && \
     colcon build
 
 WORKDIR '/sim_ws'
